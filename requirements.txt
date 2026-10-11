@@ -1,7 +1,8 @@
-streamlit
-pandas
+streamlit>=1.50
+pandas>=2.0
 numpy
-scikit-learn
+scikit-learn>=1.3
 openpyxl
-matplotlib
-seaborn
+xlrd>=2.0.1
+pytest
+xlwt

@@ -1,3 +1,5 @@
+import hmac
+import os
 from pathlib import Path
 import sys
 
@@ -6,341 +8,405 @@ import streamlit as st
 
 sys.path.append(str(Path(__file__).parent))
 
-from src.security import load_uploaded_file
-from src.data import clean_data
-from src.model import train_and_evaluate, predict_one
-from src.analytics import business_summary, category_profit, region_profit, monthly_profit
-from src.rag import SalesRAG
 from src.agent import SalesAgent
-from src.monitoring import log_event, Timer
+from src.analytics import business_summary, discount_profit, monthly_profit, profit_by
+from src.data import clean_data
+from src.export import clean_csv_bytes, report_csv_bytes, template_xlsx_bytes
+from src.i18n import COLUMN_LABELS_AR, t
+from src.model import feature_importance, predict_one, train_and_evaluate
+from src.monitoring import Timer, log_event
+from src.rag import SalesRAG
+from src.security import load_uploaded_file, prepare_table
 
-st.set_page_config(page_title="Sales Intelligence ML", page_icon="📊", layout="wide")
+st.set_page_config(page_title="Sales Intelligence | ذكاء المبيعات", page_icon="📊", layout="wide")
 
-st.title("📊 Sales Intelligence — ML")
-st.caption(
-    "Sales analytics + profitability prediction + lightweight RAG + agent routing + monitoring"
+# ---------------------------------------------------------------- language
+choice = st.sidebar.radio("Language / اللغة", ["العربية", "English"], index=0, key="language")
+lang = "ar" if choice == "العربية" else "en"
+
+
+def T(key, **values):
+    return t(lang, key, **values)
+
+
+def label(column):
+    """Column name in the language of the interface."""
+    return COLUMN_LABELS_AR.get(column, column) if lang == "ar" else column
+
+
+PLURALS = {
+    "Product": {"en": "Products", "ar": "المنتجات"},
+    "Customer": {"en": "Customers", "ar": "العملاء"},
+}
+
+if lang == "ar":  # right-to-left text for the Arabic interface
+    st.markdown(
+        """
+        <style>
+        h1, h2, h3, .stMarkdown, .stAlert, [data-testid="stMetric"],
+        [data-testid="stCaptionContainer"], label { direction: rtl; text-align: right; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+st.title(T("app_title"))
+st.caption(T("app_caption"))
+
+
+# ---------------------------------------------------------------- optional password
+def password_ok():
+    """If the environment variable APP_PASSWORD is set, ask for it before showing any data."""
+    expected = os.environ.get("APP_PASSWORD")
+    if not expected or st.session_state.get("authenticated"):
+        return True
+    st.subheader(T("login_title"))
+    typed = st.text_input(T("login_prompt"), type="password", key="login_password")
+    if st.button(T("login_button")):
+        if hmac.compare_digest(typed.encode("utf-8"), expected.encode("utf-8")):
+            st.session_state["authenticated"] = True
+            log_event("login", "success")
+            st.rerun()
+        log_event("login_failed", "wrong password")
+        st.error(T("login_wrong"))
+    return False
+
+
+if not password_ok():
+    st.stop()
+
+demo_choice = st.sidebar.radio(
+    T("demo_label"), ["en", "ar"], format_func=lambda key: T("demo_" + key), key="demo_choice"
 )
 
 
+# ---------------------------------------------------------------- helpers
 @st.cache_data(show_spinner=False)
 def load_demo_data(path):
-    return pd.read_csv(path)
+    return prepare_table(pd.read_csv(path, encoding="utf-8-sig"))
 
 
 @st.cache_data(show_spinner=False)
 def process_data(raw):
-    """Support both clean_data versions: dataframe-only or (dataframe, report)."""
-    result = clean_data(raw)
-    if isinstance(result, tuple) and len(result) == 2:
-        return result[0], result[1]
-    report = getattr(result, "attrs", {}).get("quality_report")
-    return result, report
+    """Clean the data. Returns (cleaned_dataframe, quality_report)."""
+    return clean_data(raw)
 
 
-def make_fallback_quality_report(raw, cleaned):
-    """Basic report for compatibility if clean_data does not return a report."""
-    return {
-        "rows_before": len(raw),
-        "columns_before": len(raw.columns),
-        "duplicate_rows_removed": int(raw.duplicated().sum()),
-        "rows_after_duplicates": len(raw.drop_duplicates()),
-        "rows_missing_required_fields": None,
-        "rows_after_cleaning": len(cleaned),
-        "rows_removed_total": max(0, len(raw) - len(cleaned)),
-        "missing_cells_before_cleaning": int(raw.isna().sum().sum()),
-        "missing_cells_after_cleaning": int(cleaned.isna().sum().sum()),
-        "sales_total": float(cleaned["Sales"].sum()) if "Sales" in cleaned else None,
-        "profit_total": float(cleaned["Profit"].sum()) if "Profit" in cleaned else None,
-        "date_min": cleaned["Order Date"].min() if "Order Date" in cleaned else None,
-        "date_max": cleaned["Order Date"].max() if "Order Date" in cleaned else None,
-    }
+@st.cache_resource(show_spinner=False)
+def build_assistant(dataframe):
+    return SalesAgent(dataframe, SalesRAG(dataframe))
+
+
+@st.cache_data(show_spinner=False)
+def cleaned_csv(dataframe):
+    return clean_csv_bytes(dataframe)
+
+
+@st.cache_data(show_spinner=False)
+def template_file(language):
+    return template_xlsx_bytes(language)
+
+
+def format_value(value):
+    if isinstance(value, bool):
+        return T("yes") if value else T("no")
+    if isinstance(value, float):
+        return f"{value:,.2f}"
+    if isinstance(value, list):
+        return ", ".join(label(item) for item in value) if value else "—"
+    return str(value)
+
+
+def report_table(report):
+    details = [
+        (T("dq_before"), report["rows_before"]),
+        (T("dq_after"), report["rows_after_cleaning"]),
+        (T("dq_removed"), report["rows_removed_total"]),
+        (T("dq_columns"), report["columns_before"]),
+        (T("dq_placeholders"), report["placeholders_converted"]),
+        (T("dq_summary_rows"), report["summary_rows_removed"]),
+        (T("dq_variants"), report["spelling_variants_unified"]),
+        (T("dq_duplicates"), report["duplicate_rows_removed"]),
+        (T("dq_invalid"), report["rows_missing_required_fields"]),
+        (T("dq_impossible"), report["rows_impossible_values"]),
+        (T("dq_filled"), report["categories_filled_unknown"]),
+        (T("dq_extreme"), report["possible_extreme_values_kept"]),
+        (T("dq_profit_from_cost"), report["profit_calculated_from_cost"]),
+        (T("dq_missing_optional"), report["optional_columns_missing"]),
+        (T("dq_missing_before"), report["missing_cells_before_cleaning"]),
+        (T("dq_missing_after"), report["missing_cells_after_cleaning"]),
+        (T("dq_sales"), report["sales_total"]),
+        (T("dq_profit"), report["profit_total"]),
+        (T("dq_discount"), report["discount_converted_from_percent"]),
+        (T("dq_date_order"), T("date_order_" + report["date_order"])),
+        (T("dq_date_min"), report["date_min"]),
+        (T("dq_date_max"), report["date_max"]),
+    ]
+    return pd.DataFrame(
+        [(name, format_value(value)) for name, value in details],
+        columns=[T("dq_metric"), T("dq_value")],
+    )
 
 
 def show_quality_report(report):
-    st.subheader("🔎 Data Quality Report")
+    st.subheader(T("quality_title"))
     c1, c2, c3 = st.columns(3)
-    c1.metric("Rows before cleaning", f"{report['rows_before']:,}")
-    c2.metric("Rows after cleaning", f"{report['rows_after_cleaning']:,}")
-    c3.metric("Rows removed", f"{report['rows_removed_total']:,}")
+    c1.metric(T("dq_before"), f"{report['rows_before']:,}")
+    c2.metric(T("dq_after"), f"{report['rows_after_cleaning']:,}")
+    c3.metric(T("dq_removed"), f"{report['rows_removed_total']:,}")
 
-    details = [
-        ("Columns in source file", report.get("columns_before")),
-        ("Duplicate rows removed", report.get("duplicate_rows_removed")),
-        ("Rows with invalid/missing required fields", report.get("rows_missing_required_fields")),
-        ("Missing cells before cleaning", report.get("missing_cells_before_cleaning")),
-        ("Missing cells after cleaning", report.get("missing_cells_after_cleaning")),
-        ("Total sales after cleaning", report.get("sales_total")),
-        ("Total profit after cleaning", report.get("profit_total")),
-        ("Earliest order date", report.get("date_min")),
-        ("Latest order date", report.get("date_max")),
-    ]
-    report_df = pd.DataFrame(details, columns=["Metric", "Value"])
-    report_df["Value"] = report_df["Value"].map(
-        lambda value: f"{value:,.2f}" if isinstance(value, float) else str(value)
-    )
-    st.dataframe(report_df, use_container_width=True, hide_index=True)
-    st.caption(
-        "A successful upload confirms that the file was read and processed. "
-        "It does not by itself prove that the source values are business-correct. "
-        "Compare totals with the original file."
-    )
+    table = report_table(report)
+    st.dataframe(table, width="stretch", hide_index=True)
+    st.caption(T("dq_note"))
 
+    d1, d2 = st.columns(2)
+    d1.download_button(T("download_clean"), cleaned_csv(df), file_name="cleaned_sales.csv", mime="text/csv")
+    d2.download_button(T("download_report"), report_csv_bytes(table), file_name="quality_report.csv", mime="text/csv")
+    st.markdown(f"**{T('cleaning_steps_title')}**\n\n{T('cleaning_steps')}")
+
+
+def default_for(feature):
+    """Starting value of an input of the 'try a new transaction' form."""
+    if feature in ("Sales", "Discount"):
+        return float(df[feature].median())
+    if feature == "Quantity":
+        return int(df["Quantity"].median())
+    if feature == "Ship Days":
+        return int(df["Ship Days"].median()) if df["Ship Days"].notna().any() else 4
+    if feature == "Order Month":
+        return 6
+    return int(df["Order Year"].max())  # Order Year
+
+
+# ---------------------------------------------------------------- load data
+st.sidebar.download_button(
+    T("download_template"), template_file(lang), file_name=f"sales_template_{lang}.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+)
 
 uploaded = st.file_uploader(
-    "Upload your sales data (CSV or XLSX)",
-    type=["csv", "xlsx"],
-    help="The included demo dataset is data/sample_superstore.csv.",
+    T("uploader"), type=["xlsx", "xlsm", "xls", "csv", "tsv", "txt"], help=T("uploader_help")
 )
 
 if uploaded is None:
-    default_path = Path(__file__).parent / "data" / "sample_superstore.csv"
+    demo_files = {"en": "sample_superstore.csv", "ar": "sample_arabic_sales.csv"}
+    default_path = Path(__file__).parent / "data" / demo_files[demo_choice]
     if not default_path.exists():
-        st.warning("Upload a CSV/XLSX file to start.")
+        st.warning(T("uploader"))
         st.stop()
     raw = load_demo_data(str(default_path))
-    source_name = "Built-in demo dataset"
+    source_name = f"{T('demo_name')} — {T('demo_' + demo_choice)}"
+    source_id = f"demo-{demo_choice}"  # same in both interface languages
 else:
     try:
         raw = load_uploaded_file(uploaded)
         source_name = uploaded.name
+        source_id = uploaded.name
     except Exception as e:
         log_event("upload_error", str(e))
-        st.error(f"Could not read the uploaded file: {e}")
+        st.error(T("upload_error", error=e))
         st.stop()
 
 try:
     with Timer() as timer:
         df, quality_report = process_data(raw)
-    if quality_report is None:
-        quality_report = make_fallback_quality_report(raw, df)
-    log_event(
-        "data_processing_complete",
-        f"source={source_name}, rows={len(df)}, seconds={timer.elapsed:.3f}",
-    )
+    log_event("data_processing_complete", f"source={source_name}, rows={len(df)}, seconds={timer.elapsed:.3f}")
 except Exception as e:
     log_event("pipeline_error", str(e))
-    st.error(f"Could not process this dataset: {e}")
+    st.error(T("process_error", error=e))
     st.stop()
 
 if df.empty:
-    st.error("No valid rows remain after cleaning. Check the uploaded file and its columns.")
+    st.error(T("no_rows"))
     st.stop()
 
-try:
-    summary = business_summary(df)
-except Exception as e:
-    log_event("summary_error", str(e))
-    st.error(f"Could not calculate business metrics: {e}")
-    st.stop()
+st.success(T("loaded", rows=f"{len(df):,}", source=source_name, seconds=f"{timer.elapsed:.2f}"))
 
-st.success(
-    f"Loaded {len(df):,} rows from {source_name}. Processing time: {timer.elapsed:.2f}s"
-)
-
-with st.expander("🔎 Data Quality Report", expanded=False):
+with st.expander(T("quality_title"), expanded=True):
     show_quality_report(quality_report)
 
-tabs = st.tabs(
-    [
-        "📈 Business Dashboard",
-        "🤖 ML Model",
-        "🧠 AI Assistant",
-        "🔐 Security & Monitoring",
-    ]
-)
+# A model trained on one dataset must not be shown for another uploaded file.
+data_key = f"{source_id}|{len(df)}|{df['Sales'].sum():.2f}|{df['Profit'].sum():.2f}"
+if st.session_state.get("data_key") != data_key:
+    st.session_state.pop("model_bundle", None)
+    st.session_state["data_key"] = data_key
 
+
+def apply_filters(frame):
+    """Date range and Category/Region/Segment filters. They change the dashboard only."""
+    view = frame
+    with st.expander(T("filters")):
+        low, high = frame["Order Date"].min().date(), frame["Order Date"].max().date()
+        picked = st.date_input(T("filter_dates"), value=(low, high), min_value=low, max_value=high, key=f"dates_{data_key}")
+        if isinstance(picked, tuple) and len(picked) == 2:
+            dates = view["Order Date"].dt.date
+            view = view[(dates >= picked[0]) & (dates <= picked[1])]
+        for column in ["Category", "Region", "Segment"]:
+            if column in frame.columns:
+                options = sorted(frame[column].astype(str).unique())
+                chosen = st.multiselect(label(column), options, key=f"filter_{column}_{data_key}")
+                if chosen:
+                    view = view[view[column].astype(str).isin(chosen)]
+    return view
+
+
+tabs = st.tabs([T("tab_dashboard"), T("tab_model"), T("tab_assistant"), T("tab_security")])
+
+# ---------------------------------------------------------------- dashboard
 with tabs[0]:
-    st.subheader("Business Overview")
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Total Sales", f"{summary['sales']:,.0f}")
-    c2.metric("Total Profit", f"{summary['profit']:,.0f}")
-    c3.metric("Profit Margin", f"{summary['margin']:.2f}%")
-    c4.metric("Loss Rate", f"{summary['loss_rate']:.2f}%")
+    view = apply_filters(df)
+    if view.empty:
+        st.warning(T("filter_empty"))
+    else:
+        summary = business_summary(view)
+        st.subheader(T("overview"))
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric(T("m_sales"), f"{summary['sales']:,.0f}")
+        c2.metric(T("m_profit"), f"{summary['profit']:,.0f}")
+        c3.metric(T("m_margin"), f"{summary['margin']:.2f}%")
+        c4.metric(T("m_loss"), f"{summary['loss_rate']:.2f}%")
 
-    st.subheader("Profit by Category")
-    st.bar_chart(category_profit(df))
+        for column in ["Category", "Sub-Category", "Region", "Segment", "Ship Mode"]:
+            if column in view.columns and view[column].nunique() > 1:
+                st.subheader(T("chart_by", dim=label(column)))
+                st.bar_chart(profit_by(view, column))
 
-    st.subheader("Profit by Region")
-    st.bar_chart(region_profit(df))
+        for column in ["Product", "Customer"]:  # many values: show the best and the worst ten
+            if column in view.columns and view[column].nunique() > 1:
+                ranking = profit_by(view, column).rename(label("Profit"))
+                name = PLURALS[column][lang]
+                left, right = st.columns(2)
+                left.subheader(T("top10", dim=name))
+                left.dataframe(ranking.head(10), width="stretch")
+                right.subheader(T("bottom10", dim=name))
+                right.dataframe(ranking.tail(10)[::-1], width="stretch")
 
-    monthly = monthly_profit(df)
-    if len(monthly):
-        monthly = monthly.copy()
-        monthly["Period"] = (
-            monthly["Order Year"].astype(str)
-            + "-"
-            + monthly["Order Month"].astype(str).str.zfill(2)
-        )
-        st.subheader("Monthly Sales and Profit")
-        st.line_chart(monthly.set_index("Period")[["Sales", "Profit"]])
+        if "Discount" in view.columns and view["Discount"].nunique() > 1:
+            st.subheader(T("chart_discount"))
+            st.line_chart(discount_profit(view).set_index("Discount")["Profit"])
 
-    st.subheader("Data Preview")
-    st.dataframe(df.head(20), use_container_width=True)
+        monthly = monthly_profit(view)
+        if len(monthly):
+            monthly = monthly.copy()
+            monthly["Period"] = monthly["Order Year"].astype(str) + "-" + monthly["Order Month"].astype(str).str.zfill(2)
+            st.subheader(T("chart_monthly"))
+            st.line_chart(monthly.set_index("Period")[["Sales", "Profit"]])
 
+        st.subheader(T("preview"))
+        preview = view.head(20)
+        if lang == "ar":
+            preview = preview.rename(columns=COLUMN_LABELS_AR)
+        st.dataframe(preview, width="stretch")
+
+# ---------------------------------------------------------------- ML model
 with tabs[1]:
-    st.subheader("Profitability Prediction")
+    st.subheader(T("predict_title"))
 
     if "model_bundle" not in st.session_state:
-        st.info(
-            "The ML model is trained only when you click the button. "
-            "This keeps the dashboard fast."
-        )
-        if st.button("🚀 Train ML Model", type="primary"):
+        st.info(T("train_info"))
+        if st.button(T("train_button"), type="primary"):
             try:
-                with st.spinner("Training profitability model..."):
+                with st.spinner(T("training")):
                     with Timer() as model_timer:
                         model_bundle = train_and_evaluate(df)
                 st.session_state.model_bundle = model_bundle
-                log_event(
-                    "model_training_complete",
-                    f"rows={len(df)}, seconds={model_timer.elapsed:.3f}",
-                )
+                log_event("model_training_complete", f"rows={len(df)}, seconds={model_timer.elapsed:.3f}")
                 st.rerun()
             except Exception as e:
                 log_event("model_training_error", str(e))
-                st.error(f"Could not train the model: {e}")
+                st.error(T("train_error", error=e))
     else:
         model, features, metrics = st.session_state.model_bundle
         m1, m2, m3, m4, m5 = st.columns(5)
-        m1.metric("Accuracy", f"{metrics['accuracy']:.2%}")
-        m2.metric("Precision", f"{metrics['precision']:.2%}")
-        m3.metric("Recall", f"{metrics['recall']:.2%}")
-        m4.metric("F1", f"{metrics['f1']:.2%}")
-        m5.metric("ROC-AUC", f"{metrics['roc_auc']:.2%}")
+        m1.metric(T("accuracy"), f"{metrics['accuracy']:.2%}")
+        m2.metric(T("precision"), f"{metrics['precision']:.2%}")
+        m3.metric(T("recall"), f"{metrics['recall']:.2%}")
+        m4.metric(T("f1"), f"{metrics['f1']:.2%}")
+        m5.metric(T("roc_auc"), f"{metrics['roc_auc']:.2%}")
 
-        st.write("Target: `Profitable = 1` when Profit > 0, otherwise `0`.")
-        cm = metrics["confusion_matrix"]
-        st.subheader("Confusion Matrix")
+        st.caption(
+            T(
+                "baseline_note",
+                baseline=f"{metrics['baseline_accuracy']:.1%}",
+                test=f"{metrics['test_size']:,}",
+                train=f"{metrics['train_size']:,}",
+                split=T("split_" + metrics["split_strategy"]),
+            )
+        )
+        st.write(T("target_note"))
+
+        st.subheader(T("confusion"))
         st.dataframe(
             pd.DataFrame(
-                cm,
-                index=["Actual Loss", "Actual Profit"],
-                columns=["Predicted Loss", "Predicted Profit"],
+                metrics["confusion_matrix"],
+                index=[T("actual_loss"), T("actual_profit")],
+                columns=[T("pred_loss"), T("pred_profit")],
             ),
-            use_container_width=False,
+            width="content",
         )
 
-        st.subheader("Try a New Transaction")
-        defaults = {
-            "Sales": float(df["Sales"].median()),
-            "Quantity": int(df["Quantity"].median()),
-            "Discount": float(df["Discount"].median()),
-            "Ship Days": int(df["Ship Days"].median()) if "Ship Days" in df else 4,
-            "Order Month": 6,
-            "Order Year": int(df["Order Year"].max()),
-            "Ship Mode": df["Ship Mode"].mode().iloc[0] if "Ship Mode" in df else "Standard Class",
-            "Segment": df["Segment"].mode().iloc[0] if "Segment" in df else "Consumer",
-            "Region": df["Region"].mode().iloc[0] if "Region" in df else "West",
-            "Category": df["Category"].mode().iloc[0],
-            "Sub-Category": df["Sub-Category"].mode().iloc[0],
-        }
+        st.subheader(T("importance_title"))
+        importance = feature_importance(model)
+        importance.index = [label(column) for column in importance.index]
+        st.bar_chart(importance)
 
+        st.subheader(T("try_title"))
         cols = st.columns(3)
         row = {}
         for i, feature in enumerate(features):
             with cols[i % 3]:
                 if feature in ["Sales", "Discount"]:
-                    row[feature] = st.number_input(
-                        feature, value=float(defaults.get(feature, 0.0))
-                    )
+                    row[feature] = st.number_input(label(feature), value=default_for(feature), key=f"in_{feature}")
                 elif feature in ["Quantity", "Ship Days", "Order Month", "Order Year"]:
-                    row[feature] = st.number_input(
-                        feature, value=int(defaults.get(feature, 0)), step=1
-                    )
+                    row[feature] = st.number_input(label(feature), value=default_for(feature), step=1, key=f"in_{feature}")
                 else:
-                    if feature not in df.columns:
-                        st.error(f"Feature '{feature}' is missing from the cleaned data.")
-                        st.stop()
                     options = sorted(df[feature].dropna().astype(str).unique().tolist())
-                    if not options:
-                        st.error(f"No available values for feature '{feature}'.")
-                        st.stop()
-                    default_value = str(defaults.get(feature, options[0]))
+                    most_common = str(df[feature].mode().iloc[0])
                     row[feature] = st.selectbox(
-                        feature,
-                        options,
-                        index=options.index(default_value)
-                        if default_value in options
-                        else 0,
+                        label(feature), options,
+                        index=options.index(most_common) if most_common in options else 0,
+                        key=f"in_{feature}",
                     )
 
-        if st.button("Predict Profitability", type="primary"):
+        if st.button(T("predict_button"), type="primary"):
             try:
                 pred, probability = predict_one(model, row)
-                label = "PROFITABLE" if pred else "LOSS / NOT PROFITABLE"
-                if pred:
-                    st.success(
-                        f"Prediction: **{label}** — probability of profitability: **{probability:.2%}**"
-                    )
-                else:
-                    st.warning(
-                        f"Prediction: **{label}** — probability of profitability: **{probability:.2%}**"
-                    )
-                log_event(
-                    "prediction", f"prediction={pred}, probability={probability:.4f}"
-                )
+                text = T("pred_result", label=T("pred_yes") if pred else T("pred_no"), probability=f"{probability:.2%}")
+                st.success(text) if pred else st.warning(text)
+                log_event("prediction", f"prediction={pred}, probability={probability:.4f}")
             except Exception as e:
                 log_event("prediction_error", str(e))
-                st.error(f"Prediction failed: {e}")
+                st.error(T("pred_failed", error=e))
 
+# ---------------------------------------------------------------- assistant
 with tabs[2]:
-    st.subheader("Sales AI Assistant")
-    st.write(
-        "Lightweight local RAG + agent routing. No external LLM is required "
-        "and company data stays inside the application."
-    )
-
-    @st.cache_resource(show_spinner=False)
-    def build_assistant(dataframe):
-        local_rag = SalesRAG(dataframe)
-        return SalesAgent(dataframe, local_rag)
+    st.subheader(T("assistant_title"))
+    st.write(T("assistant_desc"))
+    st.markdown(f"**{T('examples_title')}**\n\n{T('examples')}")
 
     try:
         agent = build_assistant(df)
-        question = st.text_input(
-            "Ask a sales question",
-            placeholder="Example: Which region has the lowest profit?",
-        )
-        if st.button("Ask Assistant") and question.strip():
+        question = st.text_input(T("question_label"), placeholder=T("question_placeholder"))
+        if st.button(T("ask_button")) and question.strip():
             try:
-                with st.spinner("Analyzing..."):
+                with st.spinner(T("analyzing")):
                     result = agent.run(question)
-                st.write(f"**Agent tool:** `{result['tool']}`")
+                st.write(f"**{T('agent_tool')}:** `{T('tool_' + result['tool'])}`")
                 st.write(result["answer"])
-                log_event("assistant_question", f"tool={result['tool']}")
+                log_event("assistant_question", f"tool={result['tool']}, language={result['lang']}")
             except Exception as e:
                 log_event("assistant_error", str(e))
-                st.error(f"Assistant failed: {e}")
+                st.error(T("assistant_failed", error=e))
     except Exception as e:
         log_event("assistant_initialization_error", str(e))
-        st.error(f"Could not initialize the assistant: {e}")
+        st.error(T("assistant_init_failed", error=e))
 
+# ---------------------------------------------------------------- security
 with tabs[3]:
-    st.subheader("Security")
-    st.markdown(
-        """
-- Accepts only CSV/XLSX uploads.
-- Upload size is limited to 10 MB when enforced by `src/security.py`.
-- Required business columns are validated by the upload loader.
-- No uploaded file is executed as code.
-- No external LLM is required.
-- Uploaded company data stays inside the running application process.
-"""
-    )
-    st.subheader("Monitoring")
-    st.markdown(
-        """
-- Data processing time is logged.
-- Upload/pipeline errors are logged.
-- Model training errors are logged.
-- Prediction events are logged.
-- Assistant questions and selected tools are logged.
-- Logs are stored in `logs/app.log` when configured in `src/monitoring.py`.
-"""
-    )
+    st.subheader(T("security_title"))
+    st.markdown(T("security_points"))
+    st.subheader(T("monitoring_title"))
+    st.markdown(T("monitoring_points"))
 
 st.divider()
-st.caption(
-    "Demo note: for real company data, deploy this application inside the company's "
-    "private infrastructure/VPC rather than using a public demo server."
-)
+st.caption(T("deploy_note"))

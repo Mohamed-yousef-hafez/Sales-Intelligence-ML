@@ -1,8 +1,9 @@
 import pandas as pd
 from src.data import clean_data
-from src.model import train_and_evaluate
+from src.model import train_and_evaluate, predict_one
 
-def test_model_training():
+
+def make_df():
     rows = []
     for i in range(30):
         rows.append({
@@ -16,9 +17,22 @@ def test_model_training():
             "Segment": "Consumer",
             "Region": "West",
             "Category": "Technology",
-            "Sub-Category": "Phones"
+            "Sub-Category": "Phones",
         })
-    df = clean_data(pd.DataFrame(rows))
+    return pd.DataFrame(rows)
+
+
+def test_model_training():
+    df, _ = clean_data(make_df())
     _, _, metrics = train_and_evaluate(df)
     assert 0 <= metrics["accuracy"] <= 1
     assert 0 <= metrics["roc_auc"] <= 1
+
+
+def test_predict_one():
+    df, _ = clean_data(make_df())
+    model, features, _ = train_and_evaluate(df)
+    row = df.iloc[0][features].to_dict()
+    prediction, probability = predict_one(model, row)
+    assert prediction in (0, 1)
+    assert 0 <= probability <= 1

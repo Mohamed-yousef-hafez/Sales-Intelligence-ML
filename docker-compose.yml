@@ -1,0 +1,11 @@
+services:
+  sales-intelligence:
+    build: .
+    ports:
+      - "8501:8501"
+    environment:
+      # Remove the next line to run without a password.
+      - APP_PASSWORD=change-this-password
+    volumes:
+      - ./logs:/app/logs
+    restart: unless-stopped

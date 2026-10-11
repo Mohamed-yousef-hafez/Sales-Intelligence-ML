@@ -2,7 +2,7 @@ import logging
 from pathlib import Path
 import time
 
-LOG_DIR = Path("logs")
+LOG_DIR = Path(__file__).resolve().parent.parent / "logs"
 LOG_DIR.mkdir(exist_ok=True)
 
 logger = logging.getLogger("sales_ml")
