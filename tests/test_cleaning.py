@@ -106,3 +106,12 @@ def test_all_rows_invalid_gives_a_clear_error():
     d["Sales"] = "N/A"
     with pytest.raises(ValueError, match="No valid rows"):
         clean_data(d)
+
+
+def test_duplicates_that_look_different_as_text_are_found_after_conversion():
+    one = base_table(8).head(2)
+    twin = one.head(1).copy()
+    twin["Sales"] = f"{float(one.loc[0, 'Sales']):,.2f}"                      # "100.00" as text instead of a number
+    twin["Order Date"] = (pd.Timestamp(one.loc[0, "Order Date"]) - pd.Timestamp("1899-12-30")).days   # Excel date number
+    out, report = clean_data(pd.concat([one, twin], ignore_index=True))
+    assert len(out) == 2 and report["duplicate_rows_removed"] == 1

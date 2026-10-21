@@ -1,0 +1,148 @@
+-- =====================================================================================
+--  Sales Intelligence - Power BI measures (DAX)
+--  Assumptions:  main table is named  Sales  (load sales_scored.csv or cleaned_sales.csv)
+--                forecast table is named  Forecast  (load forecast.csv)
+--  Create each block in Power BI Desktop:  Modeling > New measure / New table / New column
+--  Paste ONE block at a time (Power BI accepts one measure per formula bar).
+-- =====================================================================================
+
+
+-- ===== 1) DATE TABLE (create it first: Modeling > New table) ==========================
+-- Then: Table tools > Mark as date table (column Date), and create the relationship
+--       'Date'[Date]  1 --- *  Sales[Order Date]
+-- It runs to Dec 31 of NEXT year so forecast months fit inside it.
+Date =
+ADDCOLUMNS (
+    CALENDAR (
+        DATE ( YEAR ( MIN ( Sales[Order Date] ) ), 1, 1 ),
+        DATE ( YEAR ( MAX ( Sales[Order Date] ) ) + 1, 12, 31 )
+    ),
+    "Year", YEAR ( [Date] ),
+    "Month Number", MONTH ( [Date] ),
+    "Month Name", FORMAT ( [Date], "MMM" ),
+    "Year-Month", FORMAT ( [Date], "YYYY-MM" )
+)
+-- Tip: select column [Month Name] > Column tools > Sort by column > [Month Number]
+
+
+-- ===== 2) CORE KPIs ===================================================================
+Total Sales = SUM ( Sales[Sales] )
+
+Total Profit = SUM ( Sales[Profit] )
+
+Profit Margin % = DIVIDE ( [Total Profit], [Total Sales] )
+
+Orders = COUNTROWS ( Sales )
+
+Loss Orders = CALCULATE ( COUNTROWS ( Sales ), Sales[Profit] <= 0 )
+
+Loss Rate % = DIVIDE ( [Loss Orders], [Orders] )
+
+Avg Discount = AVERAGE ( Sales[Discount] )
+
+Avg Profit per Order = DIVIDE ( [Total Profit], [Orders] )
+
+
+-- ===== 3) COMPARISON WITH LAST YEAR (needs the Date table above) ======================
+Sales LY = CALCULATE ( [Total Sales], SAMEPERIODLASTYEAR ( 'Date'[Date] ) )
+
+Sales YoY % = DIVIDE ( [Total Sales] - [Sales LY], [Sales LY] )
+
+Profit LY = CALCULATE ( [Total Profit], SAMEPERIODLASTYEAR ( 'Date'[Date] ) )
+
+Profit YoY % = DIVIDE ( [Total Profit] - [Profit LY], ABS ( [Profit LY] ) )
+
+-- Monthly profit: put 'Date'[Year-Month] on the axis and [Total Profit] as the value.
+Profit Prev Month = CALCULATE ( [Total Profit], DATEADD ( 'Date'[Date], -1, MONTH ) )
+
+Profit MoM Change = [Total Profit] - [Profit Prev Month]
+
+
+-- ===== 4) BEST AND WORST (by profit; they follow your slicers) ========================
+Best Category =
+VAR Top1 = TOPN ( 1, ALLSELECTED ( Sales[Category] ), [Total Profit], DESC )
+RETURN MAXX ( Top1, Sales[Category] )
+
+Worst Category =
+VAR Bottom1 = TOPN ( 1, ALLSELECTED ( Sales[Category] ), [Total Profit], ASC )
+RETURN MAXX ( Bottom1, Sales[Category] )
+
+Best Product =
+VAR Top1 = TOPN ( 1, ALLSELECTED ( Sales[Product] ), [Total Profit], DESC )
+RETURN MAXX ( Top1, Sales[Product] )
+
+Worst Product =
+VAR Bottom1 = TOPN ( 1, ALLSELECTED ( Sales[Product] ), [Total Profit], ASC )
+RETURN MAXX ( Bottom1, Sales[Product] )
+
+Best Region =
+VAR Top1 = TOPN ( 1, ALLSELECTED ( Sales[Region] ), [Total Profit], DESC )
+RETURN MAXX ( Top1, Sales[Region] )
+
+Worst Region =
+VAR Bottom1 = TOPN ( 1, ALLSELECTED ( Sales[Region] ), [Total Profit], ASC )
+RETURN MAXX ( Bottom1, Sales[Region] )
+
+-- For a "Top 10 products" visual use a Table/Bar visual with Sales[Product],
+-- then Filters > Top N = 10 by [Total Profit]  (use Bottom 10 for the worst).
+
+
+-- ===== 5) AVERAGE PROFIT PER DISCOUNT LEVEL ===========================================
+-- Option A: put Sales[Discount] on the axis and [Avg Profit per Order] as the value.
+-- Option B: create these two calculated columns (Modeling > New column) to group levels:
+Discount Band =
+SWITCH (
+    TRUE (),
+    Sales[Discount] = 0, "0%",
+    Sales[Discount] <= 0.1, "1-10%",
+    Sales[Discount] <= 0.2, "11-20%",
+    Sales[Discount] <= 0.3, "21-30%",
+    Sales[Discount] <= 0.5, "31-50%",
+    "Above 50%"
+)
+
+Discount Band Order =
+SWITCH (
+    TRUE (),
+    Sales[Discount] = 0, 1,
+    Sales[Discount] <= 0.1, 2,
+    Sales[Discount] <= 0.2, 3,
+    Sales[Discount] <= 0.3, 4,
+    Sales[Discount] <= 0.5, 5,
+    6
+)
+-- Then: select [Discount Band] > Column tools > Sort by column > [Discount Band Order]
+
+
+-- ===== 6) FORECAST (table Forecast = forecast.csv) ====================================
+Forecast Sales = CALCULATE ( SUM ( Forecast[Forecast] ), Forecast[Metric] = "Sales" )
+
+Forecast Sales Low = CALCULATE ( SUM ( Forecast[Lower] ), Forecast[Metric] = "Sales" )
+
+Forecast Sales High = CALCULATE ( SUM ( Forecast[Upper] ), Forecast[Metric] = "Sales" )
+
+Forecast Profit = CALCULATE ( SUM ( Forecast[Forecast] ), Forecast[Metric] = "Profit" )
+
+-- Draw a line chart with axis = Forecast[Month]; show Low/High as the range around the line.
+-- The forecast is a statistical estimate. Look at Forecast[Reliability] and Forecast[Backtest WAPE]
+-- (typical past error) before using it.
+
+
+-- ===== 7) MODEL PREDICTIONS (only when you loaded sales_scored.csv) ===================
+High Risk Orders = CALCULATE ( COUNTROWS ( Sales ), Sales[Risk Level] = "High" )
+
+High Risk Sales Amount = CALCULATE ( [Total Sales], Sales[Risk Level] = "High" )
+
+Predicted Loss Orders = CALCULATE ( COUNTROWS ( Sales ), Sales[Predicted Profitable] = 0 )
+
+Avg Profit Probability = AVERAGE ( Sales[Profit Probability] )
+
+-- Honest evaluation of the model: rows with [In Training Set] = 1 were used for learning,
+-- so judge the model only on rows with [In Training Set] = 0.
+Model Accuracy Unseen =
+VAR Unseen = FILTER ( Sales, Sales[In Training Set] = 0 )
+RETURN
+    DIVIDE (
+        COUNTROWS ( FILTER ( Unseen, Sales[Predicted Profitable] = Sales[Profitable] ) ),
+        COUNTROWS ( Unseen )
+    )

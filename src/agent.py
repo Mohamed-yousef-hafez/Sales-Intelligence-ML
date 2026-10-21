@@ -1,4 +1,5 @@
 from .analytics import business_summary, discount_profit, group_summary, profit_by
+from .forecast import forecast_monthly
 from .i18n import DIMENSIONS, METRICS, t
 from .text_utils import PREFIXES, has_arabic, normalize_text, words_of
 
@@ -13,6 +14,7 @@ DISCOUNT_WORDS = W("discount*", "خصم*", "خصوم*", "تخفيض*")
 PROFIT_WORDS = W("profit*", "loss", "losses", "lose*", "ربح*", "ارباح*", "خسار*", "خسائر*")
 SALES_WORDS = W("sales", "revenue*", "margin*", "مبيع*", "ايراد*", "هامش*")
 SALES_ONLY_WORDS = W("sales", "revenue*", "مبيع*", "ايراد*")
+FORECAST_WORDS = W("forecast*", "next month", "next months", "توقع*", "تنبؤ*", "الشهر القادم", "الشهر الجاي", "الشهر المقبل", "الشهور القادمة")
 HIGHEST_WORDS = W("highest", "most", "best", "top", "max", "maximum", "اعلي*", "اكثر*", "افضل*", "اكبر*", "اعظم*")
 LOWEST_WORDS = W("lowest", "least", "worst", "min", "minimum", "اقل", "اسوا", "ادني", "اصغر", "اضعف")
 
@@ -71,6 +73,9 @@ class SalesAgent:
             answer = self._discount_answer(lang) if "Discount" in self.df.columns else t(lang, "ans_no_discount")
             return {"tool": "discount_profit", "lang": lang, "answer": answer}
 
+        if has_any(question, FORECAST_WORDS):
+            return {"tool": "forecast", "lang": lang, "answer": self._forecast_answer(question, lang)}
+
         found = self._find_entities(question)
         if found:
             return {"tool": "entity_summary", "lang": lang, "answer": self._entity_answer(found, lang)}
@@ -104,6 +109,20 @@ class SalesAgent:
         return None
 
     # ---------- answers ----------
+    def _forecast_answer(self, question, lang):
+        asks_profit = has_any(question, PROFIT_WORDS) and not has_any(question, SALES_ONLY_WORDS)
+        metric = "Profit" if asks_profit else "Sales"
+        result = forecast_monthly(self.df, metric, 1)
+        if result["status"] != "ok":
+            return t(lang, "fc_not_enough", needed=result["needed"], found=result["n_months"])
+        month, row = result["forecast"].index[0], result["forecast"].iloc[0]
+        verdict = t(lang, "fc_verdict_" + result["verdict"], wape=f"{result['wape']:.0%}", gain=f"{result['gain'] * 100:.1f}")
+        answer = t(lang, "ans_forecast", month=str(month), metric=METRICS[metric][lang], value=f"{row['forecast']:,.0f}",
+                   low=f"{row['lower']:,.0f}", high=f"{row['upper']:,.0f}", verdict=verdict)
+        if result["method"] == "naive":
+            answer += " " + t(lang, "fc_naive_note")
+        return answer
+
     def _summary_answer(self, lang):
         s = business_summary(self.df)
         return t(lang, "ans_summary", sales=f"{s['sales']:,.2f}", profit=f"{s['profit']:,.2f}",

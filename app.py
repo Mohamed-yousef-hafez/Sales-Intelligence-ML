@@ -11,10 +11,15 @@ sys.path.append(str(Path(__file__).parent))
 from src.agent import SalesAgent
 from src.analytics import business_summary, discount_profit, monthly_profit, profit_by
 from src.data import clean_data
-from src.export import clean_csv_bytes, report_csv_bytes, template_xlsx_bytes
+from src.export import clean_csv_bytes, quality_report_frame, report_csv_bytes, template_xlsx_bytes
+from src.forecast import forecast_monthly, normalize_metric
 from src.i18n import COLUMN_LABELS_AR, t
-from src.model import feature_importance, predict_one, train_and_evaluate
+from src.model_export import joblib_bytes, model_package_zip
+from src.model import (
+    cross_validate_time, feature_importance, predict_one, reliability_verdict, score_dataframe, train_and_evaluate,
+)
 from src.monitoring import Timer, log_event
+from src.powerbi import DASHBOARD_ZIP, EXCEL_ROW_LIMIT, WORKBOOK_NAME, build_powerbi_files, zip_bytes
 from src.rag import SalesRAG
 from src.security import load_uploaded_file, prepare_table
 
@@ -54,10 +59,22 @@ st.title(T("app_title"))
 st.caption(T("app_caption"))
 
 
+# ---------------------------------------------------------------- settings: environment variable or Streamlit Secrets
+def setting(name):
+    """A setting from an environment variable (own server, Docker) or from Streamlit Secrets (Streamlit Community Cloud)."""
+    value = os.environ.get(name)
+    if value:
+        return value
+    try:
+        return st.secrets.get(name)
+    except Exception:   # no secrets file: normal on a laptop
+        return None
+
+
 # ---------------------------------------------------------------- optional password
 def password_ok():
-    """If the environment variable APP_PASSWORD is set, ask for it before showing any data."""
-    expected = os.environ.get("APP_PASSWORD")
+    """If APP_PASSWORD is set, ask for it before showing any data."""
+    expected = setting("APP_PASSWORD")
     if not expected or st.session_state.get("authenticated"):
         return True
     st.subheader(T("login_title"))
@@ -78,6 +95,10 @@ if not password_ok():
 demo_choice = st.sidebar.radio(
     T("demo_label"), ["en", "ar"], format_func=lambda key: T("demo_" + key), key="demo_choice"
 )
+# Streamlit returns the option itself. If it ever returns the text shown on the screen, convert it back.
+demo_choice = {t(l, "demo_" + k): k for l in ("en", "ar") for k in ("en", "ar")}.get(demo_choice, demo_choice)
+if demo_choice not in ("en", "ar"):
+    demo_choice = "en"
 
 
 # ---------------------------------------------------------------- helpers
@@ -107,47 +128,6 @@ def template_file(language):
     return template_xlsx_bytes(language)
 
 
-def format_value(value):
-    if isinstance(value, bool):
-        return T("yes") if value else T("no")
-    if isinstance(value, float):
-        return f"{value:,.2f}"
-    if isinstance(value, list):
-        return ", ".join(label(item) for item in value) if value else "—"
-    return str(value)
-
-
-def report_table(report):
-    details = [
-        (T("dq_before"), report["rows_before"]),
-        (T("dq_after"), report["rows_after_cleaning"]),
-        (T("dq_removed"), report["rows_removed_total"]),
-        (T("dq_columns"), report["columns_before"]),
-        (T("dq_placeholders"), report["placeholders_converted"]),
-        (T("dq_summary_rows"), report["summary_rows_removed"]),
-        (T("dq_variants"), report["spelling_variants_unified"]),
-        (T("dq_duplicates"), report["duplicate_rows_removed"]),
-        (T("dq_invalid"), report["rows_missing_required_fields"]),
-        (T("dq_impossible"), report["rows_impossible_values"]),
-        (T("dq_filled"), report["categories_filled_unknown"]),
-        (T("dq_extreme"), report["possible_extreme_values_kept"]),
-        (T("dq_profit_from_cost"), report["profit_calculated_from_cost"]),
-        (T("dq_missing_optional"), report["optional_columns_missing"]),
-        (T("dq_missing_before"), report["missing_cells_before_cleaning"]),
-        (T("dq_missing_after"), report["missing_cells_after_cleaning"]),
-        (T("dq_sales"), report["sales_total"]),
-        (T("dq_profit"), report["profit_total"]),
-        (T("dq_discount"), report["discount_converted_from_percent"]),
-        (T("dq_date_order"), T("date_order_" + report["date_order"])),
-        (T("dq_date_min"), report["date_min"]),
-        (T("dq_date_max"), report["date_max"]),
-    ]
-    return pd.DataFrame(
-        [(name, format_value(value)) for name, value in details],
-        columns=[T("dq_metric"), T("dq_value")],
-    )
-
-
 def show_quality_report(report):
     st.subheader(T("quality_title"))
     c1, c2, c3 = st.columns(3)
@@ -155,7 +135,7 @@ def show_quality_report(report):
     c2.metric(T("dq_after"), f"{report['rows_after_cleaning']:,}")
     c3.metric(T("dq_removed"), f"{report['rows_removed_total']:,}")
 
-    table = report_table(report)
+    table = quality_report_frame(report, lang)
     st.dataframe(table, width="stretch", hide_index=True)
     st.caption(T("dq_note"))
 
@@ -163,6 +143,13 @@ def show_quality_report(report):
     d1.download_button(T("download_clean"), cleaned_csv(df), file_name="cleaned_sales.csv", mime="text/csv")
     d2.download_button(T("download_report"), report_csv_bytes(table), file_name="quality_report.csv", mime="text/csv")
     st.markdown(f"**{T('cleaning_steps_title')}**\n\n{T('cleaning_steps')}")
+
+
+def shorten(series, limit=38):
+    """Show long names (products) shortened, so the value column is visible without scrolling."""
+    series = series.copy()
+    series.index = [name if len(str(name)) <= limit else str(name)[: limit - 1] + "…" for name in series.index]
+    return series
 
 
 def default_for(feature):
@@ -184,9 +171,14 @@ st.sidebar.download_button(
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 )
 
-uploaded = st.file_uploader(
-    T("uploader"), type=["xlsx", "xlsm", "xls", "csv", "tsv", "txt"], help=T("uploader_help")
-)
+DEMO_ONLY = str(setting("APP_DEMO_ONLY") or "").lower() in ("1", "true", "yes")   # public link: demo data only
+if DEMO_ONLY:
+    uploaded = None
+    st.info(T("demo_only_note"))
+else:
+    uploaded = st.file_uploader(
+        T("uploader"), type=["xlsx", "xlsm", "xls", "csv", "tsv", "txt"], help=T("uploader_help")
+    )
 
 if uploaded is None:
     demo_files = {"en": "sample_superstore.csv", "ar": "sample_arabic_sales.csv"}
@@ -222,13 +214,19 @@ if df.empty:
 
 st.success(T("loaded", rows=f"{len(df):,}", source=source_name, seconds=f"{timer.elapsed:.2f}"))
 
+if quality_report["cleaning_needed"]:
+    st.info(T("clean_fixed", n=f"{quality_report['cleaning_changes']:,}"))
+else:
+    st.success(T("clean_ok"))
+
 with st.expander(T("quality_title"), expanded=True):
     show_quality_report(quality_report)
 
 # A model trained on one dataset must not be shown for another uploaded file.
 data_key = f"{source_id}|{len(df)}|{df['Sales'].sum():.2f}|{df['Profit'].sum():.2f}"
 if st.session_state.get("data_key") != data_key:
-    st.session_state.pop("model_bundle", None)
+    for old_key in ["model_bundle", "reliability", "scored_csv", "model_download", "pbi_pack", "pbi_pack_key"]:
+        st.session_state.pop(old_key, None)
     st.session_state["data_key"] = data_key
 
 
@@ -250,10 +248,13 @@ def apply_filters(frame):
     return view
 
 
-tabs = st.tabs([T("tab_dashboard"), T("tab_model"), T("tab_assistant"), T("tab_security")])
+tabs = st.tabs([
+    T("tab_dashboard"), T("tab_model"), T("tab_forecast"), T("tab_assistant"), T("tab_powerbi"), T("tab_security"),
+])
+tab_dashboard, tab_model, tab_forecast, tab_assistant, tab_powerbi, tab_security = tabs
 
 # ---------------------------------------------------------------- dashboard
-with tabs[0]:
+with tab_dashboard:
     view = apply_filters(df)
     if view.empty:
         st.warning(T("filter_empty"))
@@ -277,9 +278,9 @@ with tabs[0]:
                 name = PLURALS[column][lang]
                 left, right = st.columns(2)
                 left.subheader(T("top10", dim=name))
-                left.dataframe(ranking.head(10), width="stretch")
+                left.dataframe(shorten(ranking.head(10)), width="stretch")
                 right.subheader(T("bottom10", dim=name))
-                right.dataframe(ranking.tail(10)[::-1], width="stretch")
+                right.dataframe(shorten(ranking.tail(10)[::-1]), width="stretch")
 
         if "Discount" in view.columns and view["Discount"].nunique() > 1:
             st.subheader(T("chart_discount"))
@@ -293,13 +294,16 @@ with tabs[0]:
             st.line_chart(monthly.set_index("Period")[["Sales", "Profit"]])
 
         st.subheader(T("preview"))
-        preview = view.head(20)
+        preview = view.head(20).copy()
+        for date_column in ["Order Date", "Ship Date"]:
+            if date_column in preview.columns:
+                preview[date_column] = preview[date_column].dt.strftime("%Y-%m-%d")
         if lang == "ar":
             preview = preview.rename(columns=COLUMN_LABELS_AR)
         st.dataframe(preview, width="stretch")
 
 # ---------------------------------------------------------------- ML model
-with tabs[1]:
+with tab_model:
     st.subheader(T("predict_title"))
 
     if "model_bundle" not in st.session_state:
@@ -310,6 +314,8 @@ with tabs[1]:
                     with Timer() as model_timer:
                         model_bundle = train_and_evaluate(df)
                 st.session_state.model_bundle = model_bundle
+                st.session_state["model_download"] = (joblib_bytes(model_bundle, df, source_name), model_package_zip(model_bundle, df, source_name))
+                st.session_state["scored_csv"] = clean_csv_bytes(score_dataframe(df=df, model=model_bundle[0], train_index=model_bundle[2]["train_index"]))
                 log_event("model_training_complete", f"rows={len(df)}, seconds={model_timer.elapsed:.3f}")
                 st.rerun()
             except Exception as e:
@@ -350,6 +356,50 @@ with tabs[1]:
         importance.index = [label(column) for column in importance.index]
         st.bar_chart(importance)
 
+        st.subheader(T("rel_title"))
+        st.write(T("rel_desc"))
+        if "reliability" not in st.session_state:
+            if st.button(T("rel_button")):
+                try:
+                    with st.spinner(T("rel_running")):
+                        folds = cross_validate_time(df)
+                    st.session_state["reliability"] = (folds, reliability_verdict(folds))
+                    log_event("reliability_check", f"periods={len(folds)}")
+                    st.rerun()
+                except Exception as e:
+                    log_event("reliability_error", str(e))
+                    st.error(T("train_error", error=e))
+        else:
+            folds, verdict = st.session_state["reliability"]
+            if verdict["verdict"] == "not_enough":
+                st.warning(T("rel_not_enough"))
+            else:
+                table = pd.DataFrame({
+                    T("rel_period"): folds["start"].dt.strftime("%Y-%m-%d") + " → " + folds["end"].dt.strftime("%Y-%m-%d"),
+                    T("rel_train"): folds["train_rows"],
+                    T("rel_test"): folds["test_rows"],
+                    T("accuracy"): (folds["accuracy"] * 100).round(1).astype(str) + "%",
+                    T("rel_baseline"): (folds["baseline"] * 100).round(1).astype(str) + "%",
+                    T("f1"): folds["f1"].round(3),
+                    T("roc_auc"): folds["roc_auc"].round(3),
+                })
+                st.dataframe(table, hide_index=True, width="stretch")
+                st.markdown(T("rel_summary", accuracy=f"{verdict['accuracy']:.1%}", baseline=f"{verdict['baseline']:.1%}",
+                              gain=f"{verdict['gain'] * 100:.1f}", auc=f"{verdict['roc_auc']:.3f}", spread=f"{verdict['spread'] * 100:.1f}"))
+                message = T("rel_verdict_" + verdict["verdict"])
+                {"strong": st.success, "moderate": st.info, "weak": st.warning}[verdict["verdict"]](message)
+            st.caption(T("rel_note"))
+
+        if "scored_csv" in st.session_state:
+            st.download_button(T("download_scored"), st.session_state["scored_csv"], file_name="sales_scored.csv", mime="text/csv")
+            st.caption(T("scored_note"))
+        if "model_download" in st.session_state:
+            joblib_file, package_file = st.session_state["model_download"]
+            m1, m2 = st.columns(2)
+            m1.download_button(T("download_model"), joblib_file, file_name="profit_model.joblib", mime="application/octet-stream")
+            m2.download_button(T("download_model_package"), package_file, file_name="profit_model_package.zip", mime="application/zip")
+            st.caption(T("model_export_note"))
+
         st.subheader(T("try_title"))
         cols = st.columns(3)
         row = {}
@@ -372,14 +422,134 @@ with tabs[1]:
             try:
                 pred, probability = predict_one(model, row)
                 text = T("pred_result", label=T("pred_yes") if pred else T("pred_no"), probability=f"{probability:.2%}")
-                st.success(text) if pred else st.warning(text)
+                if pred:
+                    st.success(text)
+                else:
+                    st.warning(text)
                 log_event("prediction", f"prediction={pred}, probability={probability:.4f}")
             except Exception as e:
                 log_event("prediction_error", str(e))
                 st.error(T("pred_failed", error=e))
 
+# ---------------------------------------------------------------- forecast
+with tab_forecast:
+    st.subheader(T("fc_title"))
+    st.write(T("fc_desc"))
+    c1, c2 = st.columns(2)
+    metric = normalize_metric(c1.radio(T("fc_what"), ["Sales", "Profit"], horizontal=True, key="fc_metric",
+                                       format_func=lambda m: T("fc_sales") if m == "Sales" else T("fc_profit")))
+    horizon = c2.slider(T("fc_horizon"), 1, 6, 3, key="fc_horizon")
+
+    scope = df  # optional: forecast only one category or region
+    scope_columns = [column for column in ["Category", "Region"] if column in df.columns]
+    scope_boxes = st.columns(max(len(scope_columns), 1))
+    for box, column in zip(scope_boxes, scope_columns):
+        chosen = box.selectbox(label(column), [None] + sorted(df[column].astype(str).unique()), key=f"fc_{column}_{data_key}",
+                               format_func=lambda v: T("all_values") if v is None else v)
+        if chosen is not None and chosen not in (t("en", "all_values"), t("ar", "all_values")):
+            scope = scope[scope[column].astype(str) == chosen]
+
+    try:
+        result = forecast_monthly(scope, metric, horizon)
+    except Exception as e:   # an error here must not blank the whole page
+        log_event("forecast_error", f"{type(e).__name__}: {e}")
+        st.error(T("fc_failed", error=e))
+        result = {"status": "failed", "notes": {"dropped_last": None, "dropped_first": None, "gap_months": 0}}
+    notes = result["notes"]
+    if notes["dropped_last"] is not None:
+        st.info(T("fc_partial_last", month=str(notes["dropped_last"])))
+    if notes["dropped_first"] is not None:
+        st.info(T("fc_partial_first", month=str(notes["dropped_first"])))
+    if notes["gap_months"]:
+        st.info(T("fc_gap", n=notes["gap_months"]))
+
+    if result["status"] == "failed":
+        pass   # the error is already shown above
+    elif result["status"] != "ok":
+        st.warning(T("fc_not_enough", needed=result["needed"], found=result["n_months"]))
+    else:
+        forecast = result["forecast"]
+        first = forecast.iloc[0]
+        m1, m2 = st.columns(2)
+        m1.metric(T("fc_next", month=str(forecast.index[0])), f"{first['forecast']:,.0f}")
+        m2.metric(T("fc_range_label"), f"{first['lower']:,.0f} — {first['upper']:,.0f}")
+        st.markdown(T("fc_method_line", method=T("fcm_" + result["method"])))
+        st.markdown(T("fc_error_line", wape=f"{result['wape']:.1%}", base=f"{result['baseline_wape']:.1%}"))
+        message = T("fc_verdict_" + result["verdict"], wape=f"{result['wape']:.0%}", gain=f"{result['gain'] * 100:.1f}")
+        {"good": st.success, "ok": st.info, "weak": st.warning}[result["verdict"]](message)
+        if result["method"] == "naive":
+            st.caption(T("fc_naive_note"))
+
+        history = result["history"].tail(36)
+        chart = pd.DataFrame(index=[str(p) for p in list(history.index) + list(forecast.index)])
+        chart[T("fc_history_label")] = list(history.values) + [None] * len(forecast)
+        join_line = [None] * (len(history) - 1) + [history.iloc[-1]] + list(forecast["forecast"])   # starts at the last real month
+        chart[T("fc_forecast_label")] = join_line
+        chart[T("fc_col_low")] = [None] * len(history) + list(forecast["lower"])
+        chart[T("fc_col_high")] = [None] * len(history) + list(forecast["upper"])
+        st.subheader(T("fc_chart"))
+        st.line_chart(chart)
+
+        st.subheader(T("fc_table"))
+        st.dataframe(pd.DataFrame({
+            T("fc_col_month"): [str(p) for p in forecast.index],
+            T("fc_col_forecast"): forecast["forecast"].round(0).astype(int).to_numpy(),
+            T("fc_col_low"): forecast["lower"].round(0).astype(int).to_numpy(),
+            T("fc_col_high"): forecast["upper"].round(0).astype(int).to_numpy(),
+        }), hide_index=True, width="stretch")
+
+        with st.expander(T("fc_backtest", n=result["backtest_months"])):
+            scores = result["scores"].sort_values()
+            st.dataframe(pd.DataFrame({
+                T("fc_col_method"): [("✅ " if name == result["method"] else "") + T("fcm_" + name) for name in scores.index],
+                T("fc_col_error"): [f"{value:.1%}" for value in scores.values],
+            }), hide_index=True, width="stretch")
+    st.caption(T("fc_disclaimer"))
+
+# ---------------------------------------------------------------- power bi
+with tab_powerbi:
+    st.subheader(T("pbi_title"))
+    st.write(T("pbi_desc"))
+    st.markdown(T("pbi_files"))
+    if "model_bundle" not in st.session_state:
+        st.info(T("pbi_model_missing"))
+
+    pack_key = (data_key, "model_bundle" in st.session_state, "reliability" in st.session_state)
+    if st.button(T("pbi_prepare"), type="primary"):
+        try:
+            with st.spinner(T("pbi_preparing")):
+                reliability_summary = st.session_state["reliability"][1] if "reliability" in st.session_state else None
+                files = build_powerbi_files(df, quality_report, st.session_state.get("model_bundle"),
+                                            reliability_summary, horizon=3, source=source_name, lang=lang)
+            st.session_state["pbi_pack"] = (zip_bytes(files), len(files), files.get(WORKBOOK_NAME), files.get(DASHBOARD_ZIP))
+            st.session_state["pbi_pack_key"] = pack_key
+            log_event("powerbi_pack", f"files={len(files)}")
+        except Exception as e:
+            log_event("powerbi_pack_error", str(e))
+            st.error(T("process_error", error=e))
+    if st.session_state.get("pbi_pack_key") == pack_key and "pbi_pack" in st.session_state:
+        pack, count, workbook, dashboard = st.session_state["pbi_pack"]
+        st.success(T("pbi_ready", files=count))
+        if dashboard is not None:   # the ready dashboard, a Power BI project
+            st.download_button(T("pbi_download_dashboard"), dashboard, file_name=DASHBOARD_ZIP, type="primary", mime="application/zip")
+            st.caption(T("pbi_dashboard_note"))
+        if workbook is not None:   # the main file: everything in ONE Excel workbook
+            st.download_button(T("pbi_download_xlsx"), workbook, file_name=WORKBOOK_NAME, type="primary",
+                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        else:
+            st.info(T("pbi_too_big", limit=f"{EXCEL_ROW_LIMIT:,}"))
+        st.download_button(T("pbi_download"), pack, file_name="power_bi_pack.zip", mime="application/zip")
+        st.markdown(T("pbi_steps"))
+
+    st.subheader(T("pbi_refresh_title"))
+    st.markdown(T("pbi_refresh_text"))
+    dax_file = Path(__file__).parent / "powerbi" / "measures.dax"
+    if dax_file.exists():
+        with st.expander(T("pbi_dax_title")):
+            st.code(dax_file.read_text(encoding="utf-8"), language="sql")
+
 # ---------------------------------------------------------------- assistant
-with tabs[2]:
+with tab_assistant:
     st.subheader(T("assistant_title"))
     st.write(T("assistant_desc"))
     st.markdown(f"**{T('examples_title')}**\n\n{T('examples')}")
@@ -402,7 +572,7 @@ with tabs[2]:
         st.error(T("assistant_init_failed", error=e))
 
 # ---------------------------------------------------------------- security
-with tabs[3]:
+with tab_security:
     st.subheader(T("security_title"))
     st.markdown(T("security_points"))
     st.subheader(T("monitoring_title"))

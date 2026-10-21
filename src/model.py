@@ -1,11 +1,16 @@
+import os
+import warnings
+
+import numpy as np
 import pandas as pd
+from sklearn.base import clone
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
 from sklearn.metrics import (
     accuracy_score, precision_score, recall_score,
     f1_score, roc_auc_score, confusion_matrix,
 )
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import TimeSeriesSplit, train_test_split
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder
@@ -17,6 +22,15 @@ FEATURES = [
 ]
 # Unit Price = Sales / Quantity. It is calculated automatically (the user does not type it).
 MODEL_FEATURES = FEATURES + ["Unit Price"]
+
+# How many CPU cores the forest may use. -1 = all of them. If training feels slow on your computer, try 1:
+#   PowerShell:  $env:SALES_ML_JOBS="1"     CMD:  set SALES_ML_JOBS=1     Linux/Mac:  export SALES_ML_JOBS=1
+#   (then start the app again in the same window)
+N_JOBS = int(os.environ.get("SALES_ML_JOBS", "-1"))
+
+# Some scikit-learn/joblib version pairs print this warning for every tree batch. It does not change any result here
+# (we use no custom scikit-learn settings), but it fills the screen, so it is hidden.
+warnings.filterwarnings("ignore", message=".*sklearn.utils.parallel.delayed.*", category=UserWarning)
 
 
 def add_unit_price(frame):
@@ -65,7 +79,7 @@ def build_model(df):
         max_depth=10,
         random_state=42,
         class_weight="balanced",
-        n_jobs=-1,
+        n_jobs=N_JOBS,
     )
     pipeline = Pipeline([
         ("preprocessor", preprocessor),
@@ -142,6 +156,7 @@ def train_and_evaluate(df):
         "test_size": len(y_test),
         "train_size": len(y_train),
         "split_strategy": split_strategy,
+        "train_index": X_train.index.to_numpy(),   # which rows were used for training (needed when scoring all rows)
     }
     return pipeline, features, metrics
 
@@ -166,3 +181,77 @@ def feature_importance(model):
         column = max(matches, key=len) if matches else encoded_name
         totals[column] = totals.get(column, 0) + float(value)
     return pd.Series(totals).sort_values(ascending=False)
+
+
+# ----------------------------------------------------------------------------- scoring
+def score_dataframe(model, df, train_index=None):
+    """Add the model's opinion to every row: profit probability, prediction and risk level.
+    Column names are always English so Power BI reports keep working."""
+    data = add_unit_price(df)
+    probability = model.predict_proba(data[list(model.feature_names_in_)])[:, 1]
+    loss_probability = 1 - probability
+    scored = df.copy()
+    scored["Profit Probability"] = probability.round(4)
+    scored["Predicted Profitable"] = (probability >= 0.5).astype(int)
+    scored["Risk Level"] = np.select([loss_probability >= 0.6, loss_probability >= 0.3], ["High", "Medium"], default="Low")
+    if train_index is not None:
+        # Rows the model learned from have optimistic predictions. Judge the model on rows with 0.
+        scored["In Training Set"] = df.index.isin(train_index).astype(int)
+    return scored
+
+
+# ----------------------------------------------------------------------------- reliability check
+def cross_validate_time(df, folds=5):
+    """Train on the past and test on the next period, several times (expanding window).
+    This shows how the model behaves on YOUR data, and compares it with the best constant guess."""
+    check_data_is_enough(df)
+    data = add_unit_price(df).sort_values("Order Date").reset_index(drop=True)
+    pipeline, model_columns = build_model(data)
+    X = data[model_columns]
+    y = data["Profitable"].astype(int)
+    if len(data) > 50_000:
+        folds = min(folds, 3)  # keep it fast on very large files
+
+    rows = []
+    for number, (train_idx, test_idx) in enumerate(TimeSeriesSplit(n_splits=folds).split(X), start=1):
+        y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
+        if y_train.nunique() < 2 or y_test.nunique() < 2:
+            continue  # a period with only one outcome cannot be judged
+        fold_model = clone(pipeline).fit(X.iloc[train_idx], y_train)
+        predictions = fold_model.predict(X.iloc[test_idx])
+        probabilities = fold_model.predict_proba(X.iloc[test_idx])[:, 1]
+        rows.append({
+            "fold": number,
+            "start": data["Order Date"].iloc[test_idx].min(),
+            "end": data["Order Date"].iloc[test_idx].max(),
+            "train_rows": len(train_idx),
+            "test_rows": len(test_idx),
+            "accuracy": accuracy_score(y_test, predictions),
+            "baseline": float(max(y_test.mean(), 1 - y_test.mean())),   # best constant guess
+            "f1": f1_score(y_test, predictions, zero_division=0),
+            "roc_auc": roc_auc_score(y_test, probabilities),
+        })
+    return pd.DataFrame(rows)
+
+
+def reliability_verdict(folds):
+    """Turn the per-period results into one clear verdict: strong, moderate, weak or not_enough."""
+    if len(folds) < 2:
+        return {"verdict": "not_enough", "folds": len(folds)}
+    gain = folds["accuracy"] - folds["baseline"]
+    summary = {
+        "folds": len(folds),
+        "accuracy": float(folds["accuracy"].mean()),
+        "baseline": float(folds["baseline"].mean()),
+        "gain": float(gain.mean()),
+        "min_gain": float(gain.min()),
+        "roc_auc": float(folds["roc_auc"].mean()),
+        "spread": float(folds["accuracy"].std(ddof=0)),
+    }
+    if summary["roc_auc"] < 0.65 or summary["gain"] < 0.02:
+        summary["verdict"] = "weak"
+    elif summary["roc_auc"] >= 0.80 and summary["gain"] >= 0.05 and summary["min_gain"] > 0:
+        summary["verdict"] = "strong"
+    else:
+        summary["verdict"] = "moderate"
+    return summary

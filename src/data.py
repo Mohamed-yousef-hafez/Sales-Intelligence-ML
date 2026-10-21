@@ -237,6 +237,13 @@ def clean_data(df):
     for col in date_columns:
         df[col] = parse_dates(df[col], day_first=(date_order == "day-first"))
 
+    # Duplicates again: rows that looked different as text ("1,200" / "1200.00", a date as text / as an Excel number)
+    # are identical now that numbers and dates are converted.
+    duplicates_after_conversion = int(df.duplicated().sum())
+    duplicate_count += duplicates_after_conversion
+    df = df.drop_duplicates().copy()
+    rows_after_duplicates = len(df)
+
     missing_columns = [col for col in ["Sales", "Order Date"] if col not in df.columns]
     if "Profit" not in df.columns and "Cost" not in df.columns:
         missing_columns.append("Profit")
@@ -287,7 +294,11 @@ def clean_data(df):
     df["Order Year"] = df["Order Date"].dt.year
     df["Profitable"] = (df["Profit"] > 0).astype(int)
 
+    corrections = (placeholders + summary_rows_removed + variants_merged + duplicate_count
+                   + rows_with_missing_required + rows_impossible + filled_unknown + int(discount_converted))
     report = {
+        "cleaning_changes": corrections,           # 0 means the file was already clean
+        "cleaning_needed": corrections > 0,
         "rows_before": rows_before,
         "columns_before": columns_before,
         "placeholders_converted": placeholders,

@@ -166,4 +166,4 @@ def test_password_protection(monkeypatch):
     assert at.error and not at.tabs
     at.text_input[0].set_value("s3cret").run()
     at.button[0].click().run()
-    assert not at.exception and len(at.tabs) == 4                # logged in
+    assert not at.exception and len(at.tabs) == 6                # logged in

@@ -9,3 +9,13 @@ services:
     volumes:
       - ./logs:/app/logs
     restart: unless-stopped
+
+  # Optional: automatic refresh for Power BI. Put new sales files in ./inbox, results appear in ./exports.
+  refresh:
+    build: .
+    command: ["python", "refresh_exports.py", "--input", "/app/inbox", "--output", "/app/exports", "--watch", "300"]
+    volumes:
+      - ./inbox:/app/inbox
+      - ./exports:/app/exports
+      - ./logs:/app/logs
+    restart: unless-stopped

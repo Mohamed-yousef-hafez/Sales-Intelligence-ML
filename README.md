@@ -99,6 +99,50 @@ No external LLM is used and no data leaves the application.
 - Optional **password**: set the environment variable `APP_PASSWORD`.
 - Exported CSV files are protected against Excel formula injection.
 
+## 5a. Forecast, reliability check and Power BI (`src/forecast.py`, `src/powerbi.py`, `src/pipeline.py`, `powerbi/`)
+
+- **Forecast tab:** next 1-6 months of Sales or Profit (optionally for one category/region). Five simple methods
+  (repeat last month, 3-month average, same month last year, recent level x seasonal strength, trend + seasonality) are
+  **tested on the last months of the company's own data**; the most accurate is used and compared with "repeat last month".
+  The result shows the typical past error (WAPE), the baseline error, an approximate 80% range and a verdict
+  (reliable / moderate / weak). Needs 9 complete months. An unfinished last month is detected and not used for learning.
+  Honest limits: the future is assumed to behave like the past, and the past error is slightly optimistic because the
+  method was chosen on the same months. The assistant also answers "next month forecast" questions.
+- **Reliability check (ML tab):** trains on the past and tests on the following period five times in a row
+  (time-based cross-validation) and compares every period with the best constant guess. Verdict: strong / moderate / weak.
+  **Accuracy on one company's data is not guaranteed on another's**: always run this check on the company's own file.
+- **Predictions per sale:** download the data with `Profit Probability`, `Predicted Profitable`, `Risk Level` and `In Training Set`
+  (rows used for training have optimistic probabilities; judge the model on rows with 0).
+- **Power BI tab:** **`power_bi_data.xlsx` - ONE Excel file with every table** (Excel Tables named Sales, Forecast, Monthly,
+  Quality, ModelMetrics, Status, so Power BI lists them by the names used in the DAX; up to 100,000 rows, above that only CSV),
+  plus a ZIP with the same tables as CSV, `STEP_BY_STEP.md` (click-by-click setup, three report pages, checklist, troubleshooting),
+  and the cleaned data, scored data, forecast, monthly summary, quality report, model metrics,
+  `measures.dax`, `load_sales.pq` and `README_POWERBI.md` (setup, KPIs, Date table, Sales LY).
+  The DAX and Power Query code could not be run inside Power BI in the build environment; a test checks that every
+  column they use exists in the exported files.
+- **Automatic refresh:** `python refresh_exports.py` reads the newest file (or all files with `--combine`) from `inbox/`,
+  cleans, trains, forecasts and writes the Power BI files to `exports/` (atomic writes; if a run fails the old files stay
+  and `refresh_status.csv` says why). `--watch 300` keeps running; `run_refresh_windows.bat` is for Windows Task Scheduler;
+  `docker compose up` also starts a `refresh` service. In Power BI Service the dataset refresh must be scheduled
+  (Pro: up to 8 per day; files on a local computer/server need an on-premises data gateway; Power BI Desktop does not refresh by itself).
+
+## 5c. Model export, ready dashboard, cleaning status and free link
+
+- **Model as a file:** after training, the ML tab offers the model as `profit_model.joblib` and as a ZIP package
+  (`model_card.json` with the input columns and metrics, `use_model.py` that scores a CSV/Excel file with only pandas+scikit-learn+joblib,
+  and a guide). A test runs the script in an isolated process and checks it gives the same probabilities as the app.
+  Warning: .joblib files can run code when loaded; use the same scikit-learn version. `refresh_exports.py` writes these files too.
+- **Ready Power BI dashboard:** `power_bi_dashboard.zip` is a Power BI Project (`Sales Dashboard.pbip`: data model in TMDL with
+  tables, a Date table, relationship and the DAX measures; report in PBIR with 4 pages: Overview, Forecast, Loss risk, Data quality).
+  It reads `power_bi_data.xlsx` (path parameter `DataFile`) and adapts to the columns that exist. The JSON files are checked against
+  Microsoft's published schemas (`python tools/validate_pbip.py <folder>`) and tests check that every field a visual uses exists in the model.
+  It could **not** be opened in Power BI Desktop while building the app: if it shows an error, use `powerbi/STEP_BY_STEP.md` and send me the error.
+  Only for data up to 100,000 rows (it needs the Excel file).
+- **Cleaning status:** every file goes through the same checks. A banner says "already clean" (0 corrections) or "N corrections made".
+- **Free public link:** see `DEPLOY_FREE.md` (Streamlit Community Cloud, `APP_DEMO_ONLY` mode, tunnel, own server).
+  Settings (`APP_PASSWORD`, `APP_DEMO_ONLY`) can come from environment variables or Streamlit Secrets.
+- Install for tests: `pip install -r requirements-dev.txt` (`requirements.txt` is the runtime only).
+
 ## 5b. Security and monitoring
 
 Upload validation (extension, size, rows), no uploaded file is executed, logs in `logs/app.log`
@@ -112,6 +156,8 @@ For real company data deploy inside the company's private infrastructure and use
 - Docker: `docker compose up --build` (set `APP_PASSWORD` in `docker-compose.yml`). Open http://localhost:8501.
 - Tests: `pytest`.
 - Staff guide (Arabic + English): `USER_GUIDE.md`.
+
+Streamlit usage statistics are switched off (`.streamlit/config.toml`).
 
 Verified: the Streamlit server starts and answers its health check; all tests pass.
 The Docker files and the `.bat`/`.sh` scripts were written but not run in the build environment, so test them once on your machine.

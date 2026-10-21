@@ -76,6 +76,10 @@ TEXT = {
         "demo_name": "Built-in demo dataset",
         # ---- quality report ----
         "quality_title": "🔎 Data Quality Report",
+        "dq_changes": "Corrections made in total (0 = the file was already clean)",
+        "clean_ok": "✅ The file was already clean: no corrections were needed. (Every file goes through the same checks; this one passed them all.)",
+        "clean_fixed": "🧹 The file needed cleaning: {n} corrections were made. See the report below.",
+        "demo_only_note": "This public demo uses the built-in demo data only. File upload is switched off.",
         "dq_before": "Rows before cleaning",
         "dq_after": "Rows after cleaning",
         "dq_removed": "Rows removed",
@@ -246,6 +250,123 @@ TEXT = {
         "doc_discount": "Average profit for discount {discount} is {value}.",
         "doc_year": "In {year}, sales were {sales} and profit was {profit}.",
         # ---- bilingual data errors (shown as-is) ----
+        # ---- forecast / reliability / power bi ----
+        "tab_forecast": "🔮 Forecast",
+        "tab_powerbi": "📤 Power BI",
+        "fc_title": "Forecast for the coming months",
+        "fc_desc": (
+            "A statistical forecast from your monthly history. Several simple methods are tested on the past months "
+            "of YOUR data, the most accurate one is used, and it is compared with the simplest guess "
+            "(next month = last month)."
+        ),
+        "fc_what": "What to forecast",
+        "fc_sales": "Sales",
+        "fc_profit": "Profit",
+        "fc_horizon": "Months ahead",
+        "all_values": "All",
+        "fc_failed": "The forecast could not be calculated: {error}",
+        "fc_not_enough": "Not enough history: at least {needed} complete months are needed (found {found}).",
+        "fc_partial_last": "The last month ({month}) looks incomplete, so it was not used for learning. The forecast starts from it.",
+        "fc_partial_first": "The first month ({month}) starts late in the month, so it was not used.",
+        "fc_gap": "{n} month(s) without any sales were counted as zero.",
+        "fc_next": "Forecast for {month}",
+        "fc_range_label": "Likely range",
+        "fc_method_line": "Method chosen by testing on past months: **{method}**",
+        "fc_error_line": "Typical error on past months: **{wape}** — simple baseline (repeat last month): **{base}**",
+        "fc_chart": "History and forecast",
+        "fc_history_label": "Actual",
+        "fc_forecast_label": "Forecast",
+        "fc_table": "Forecast table",
+        "fc_col_month": "Month",
+        "fc_col_forecast": "Forecast",
+        "fc_col_low": "Low",
+        "fc_col_high": "High",
+        "fc_backtest": "How accurate was each method on the last {n} months? (typical error, lower is better)",
+        "fc_col_method": "Method",
+        "fc_col_error": "Typical error",
+        "fcm_naive": "Repeat last month",
+        "fcm_moving_average": "Average of the last 3 months",
+        "fcm_seasonal_naive": "Same month last year",
+        "fcm_seasonal_level": "Recent level x usual strength of each month",
+        "fcm_trend_seasonal": "Trend + seasonality",
+        "fc_verdict_good": "Reliable: the chosen method beat the baseline by {gain} points on past months (typical error {wape}).",
+        "fc_verdict_ok": "Moderate: use it as a rough guide. Typical error on past months was {wape} (baseline gain: {gain} points).",
+        "fc_verdict_weak": "Weak: the forecast is not clearly better than repeating last month, or its typical error is high ({wape}). Do not rely on it.",
+        "fc_naive_note": "No method was better than repeating last month, so this forecast simply equals last month's value.",
+        "fc_disclaimer": (
+            "A forecast assumes the future behaves like the past. Promotions, price changes, new products or "
+            "economic events are unknown to it. The past error is measured on the same months used to choose the method, "
+            "so real errors can be a little higher."
+        ),
+        "rel_button": "🧪 Check reliability on my data",
+        "rel_running": "Testing the model on several past periods...",
+        "rel_title": "Reliability check on your data",
+        "rel_desc": (
+            "The model learns from the past and is tested on the following period, several times in a row "
+            "(time-based cross-validation), and compared with the best constant guess."
+        ),
+        "rel_period": "Test period",
+        "rel_train": "Training rows",
+        "rel_test": "Test rows",
+        "rel_baseline": "Baseline accuracy",
+        "rel_summary": (
+            "Average accuracy **{accuracy}** vs baseline **{baseline}** (gain **{gain}** points) — "
+            "average ROC-AUC **{auc}** — spread between periods about ±{spread} points."
+        ),
+        "rel_verdict_strong": "Strong: the model beats the baseline clearly in every tested period. Still check it on new data before relying on it.",
+        "rel_verdict_moderate": "Moderate: better than the baseline, but the gain is modest or changes between periods. Use predictions as a guide only.",
+        "rel_verdict_weak": "Weak: the model is not clearly better than the baseline on your data. Do not use its predictions for decisions.",
+        "rel_not_enough": "Not enough data for a reliable check: several periods with both profitable and loss-making sales are needed.",
+        "rel_note": "These numbers are measured on YOUR data. Performance on future data can be lower if business conditions change.",
+        "download_scored": "⬇️ Download data with profit probability (CSV)",
+        "scored_note": (
+            "Every row gets the probability that the sale is profitable and a risk level (Low / Medium / High). "
+            "Rows with `In Training Set = 1` were used to train the model, so their probabilities are optimistic; "
+            "judge the model on rows with `In Training Set = 0`."
+        ),
+        "pbi_title": "Export for Power BI",
+        "pbi_desc": (
+            "One pack with the cleaned data, the model predictions, the forecast, a monthly summary, the quality report, "
+            "ready-made DAX measures and the setup guide."
+        ),
+        "pbi_download": "⬇️ Download Power BI pack (ZIP)",
+        "pbi_model_missing": "Predictions are added to the pack after you train the model in the ML tab.",
+        "pbi_prepare": "Prepare the Power BI pack",
+        "pbi_preparing": "Building the files (cleaned data, forecast, predictions)...",
+        "pbi_ready": "The pack is ready: {files} files.",
+        "pbi_files": (
+            "- **`power_bi_data.xlsx` — ONE Excel file with every table** (Sales, Forecast, Monthly, Quality, ModelMetrics, Status). "
+            "In Power BI: Get data ▸ Excel workbook ▸ tick all tables.\n"
+            "- CSV files of the same tables (`sales_scored.csv` when the model is trained, `cleaned_sales.csv`, `forecast.csv`, ...)\n"
+            "- `measures.dax`, `load_sales.pq`, `README_POWERBI.md` and **`STEP_BY_STEP.md`** (the full setup guide)"
+        ),
+        "pbi_download_xlsx": "⬇️ Download ONE Excel file for Power BI",
+        "pbi_download_dashboard": "⬇️ Download the READY Power BI dashboard (.pbip project)",
+        "pbi_dashboard_note": (
+            "Unzip it into `C:\\SalesIntelligence\\` (the Excel file is inside), open `Sales Dashboard.pbip` with Power BI Desktop and press Refresh. "
+            "It has 4 pages: Overview, Forecast, Loss risk, Data quality. It was built with Microsoft's published project format and "
+            "checked against Microsoft's JSON schemas, but it has not been opened in Power BI Desktop yet. If Power BI shows an error, "
+            "use `STEP_BY_STEP.md` (the manual way) and send me the error."
+        ),
+        "download_model": "⬇️ Download the trained model (.joblib)",
+        "download_model_package": "⬇️ Download the model package (ZIP: model + card + script + guide)",
+        "model_export_note": (
+            "To use the model in your own system. Load a .joblib file only from a source you trust (it can run code) "
+            "and use the same scikit-learn version as in `model_card.json`."
+        ),
+        "pbi_too_big": "The data has more than {limit} rows, which is too many for one Excel file. Use the ZIP (CSV files).",
+        "pbi_steps": "Setup guide: open `STEP_BY_STEP.md` inside the ZIP. The first setup takes about an hour; later refreshes take a minute.",
+        "pbi_dax_title": "DAX measures (also inside the pack)",
+        "pbi_refresh_title": "Automatic refresh",
+        "pbi_refresh_text": (
+            "1. Put each new sales file in the `inbox` folder.\n"
+            "2. `python refresh_exports.py` refreshes the files in `exports` once; add `--watch 300` to keep watching the folder.\n"
+            "3. Schedule it with Windows Task Scheduler (`run_refresh_windows.bat`) or cron.\n"
+            "4. In Power BI Service, schedule the dataset refresh. Power BI Desktop does not refresh by itself. "
+            "Files on a local computer or server need an on-premises data gateway, and Pro allows 8 scheduled refreshes per day."
+        ),
+        "ans_forecast": "Forecast for {month}: {metric} {value} (likely range {low} to {high}). {verdict}",
+        "tool_forecast": "forecast",
         "err_empty": "The dataset is empty.",
     },
     "ar": {
@@ -282,6 +403,10 @@ TEXT = {
         "demo_name": "البيانات التجريبية المدمجة",
         # ---- quality report ----
         "quality_title": "🔎 تقرير جودة البيانات",
+        "dq_changes": "إجمالي التصحيحات (0 = الملف كان نظيفاً أصلاً)",
+        "clean_ok": "✅ الملف كان نظيفاً أصلاً: لا حاجة لأي تصحيح. (كل ملف يمرّ على نفس الفحوصات، وهذا الملف اجتازها كلها.)",
+        "clean_fixed": "🧹 الملف احتاج تنظيفاً. عدد التصحيحات: {n}. راجع التقرير بالأسفل.",
+        "demo_only_note": "هذا العرض العام يستخدم البيانات التجريبية المدمجة فقط. رفع الملفات متوقف.",
         "dq_before": "عدد الصفوف قبل التنظيف",
         "dq_after": "عدد الصفوف بعد التنظيف",
         "dq_removed": "الصفوف المحذوفة",
@@ -447,6 +572,121 @@ TEXT = {
         "doc_discount": "متوسط الربح عند خصم {discount} هو {value}.",
         "doc_year": "في سنة {year} بلغت المبيعات {sales} وبلغ الربح {profit}.",
         # ---- bilingual data errors ----
+        # ---- forecast / reliability / power bi ----
+        "tab_forecast": "🔮 التوقعات",
+        "tab_powerbi": "📤 Power BI",
+        "fc_title": "توقع الشهور القادمة",
+        "fc_desc": (
+            "توقع إحصائي من تاريخ مبيعاتك الشهري. تُختبر عدة طرق بسيطة على الشهور الماضية في بياناتك أنت، "
+            "وتُستخدم الأدق منها، وتُقارن بأبسط تخمين (الشهر القادم = الشهر الماضي)."
+        ),
+        "fc_what": "ماذا تريد أن تتوقع؟",
+        "fc_sales": "المبيعات",
+        "fc_profit": "الربح",
+        "fc_horizon": "عدد الشهور القادمة",
+        "all_values": "الكل",
+        "fc_failed": "تعذّر حساب التوقع: {error}",
+        "fc_not_enough": "التاريخ غير كافٍ: يلزم {needed} شهور كاملة على الأقل (الموجود {found}).",
+        "fc_partial_last": "الشهر الأخير ({month}) يبدو غير مكتمل، لذلك لم يُستخدم في التعلّم، ويبدأ التوقع منه.",
+        "fc_partial_first": "الشهر الأول ({month}) يبدأ متأخراً في الشهر، لذلك لم يُستخدم.",
+        "fc_gap": "{n} شهر بلا أي مبيعات تم احتسابها صفراً.",
+        "fc_next": "توقع {month}",
+        "fc_range_label": "المدى المحتمل",
+        "fc_method_line": "الطريقة المختارة بعد اختبارها على الشهور الماضية: **{method}**",
+        "fc_error_line": "متوسط الخطأ على الشهور الماضية: **{wape}** — خط الأساس البسيط (تكرار الشهر الماضي): **{base}**",
+        "fc_chart": "التاريخ والتوقع",
+        "fc_history_label": "الفعلي",
+        "fc_forecast_label": "التوقع",
+        "fc_table": "جدول التوقعات",
+        "fc_col_month": "الشهر",
+        "fc_col_forecast": "التوقع",
+        "fc_col_low": "الأدنى",
+        "fc_col_high": "الأعلى",
+        "fc_backtest": "ما دقة كل طريقة على آخر {n} شهور؟ (متوسط الخطأ، الأقل أفضل)",
+        "fc_col_method": "الطريقة",
+        "fc_col_error": "متوسط الخطأ",
+        "fcm_naive": "تكرار الشهر الماضي",
+        "fcm_moving_average": "متوسط آخر 3 شهور",
+        "fcm_seasonal_naive": "نفس الشهر في العام الماضي",
+        "fcm_seasonal_level": "المستوى الحديث × قوة كل شهر المعتادة",
+        "fcm_trend_seasonal": "الاتجاه + الموسمية",
+        "fc_verdict_good": "موثوق: الطريقة المختارة تفوّقت على خط الأساس بـ {gain} نقطة في الشهور الماضية (متوسط الخطأ {wape}).",
+        "fc_verdict_ok": "متوسط الموثوقية: استخدمه كتقدير تقريبي. متوسط الخطأ في الشهور الماضية {wape} (التفوق على خط الأساس: {gain} نقطة).",
+        "fc_verdict_weak": "ضعيف: التوقع ليس أفضل بوضوح من تكرار الشهر الماضي، أو خطؤه كبير ({wape}). لا تعتمد عليه.",
+        "fc_naive_note": "لم تتفوق أي طريقة على تكرار الشهر الماضي، لذلك التوقع هو نفس قيمة الشهر الماضي.",
+        "fc_disclaimer": (
+            "التوقع يفترض أن المستقبل يشبه الماضي. العروض وتغيّر الأسعار والمنتجات الجديدة والأحداث الاقتصادية غير معروفة له. "
+            "ويُقاس الخطأ الماضي على نفس الشهور التي اختيرت بها الطريقة، لذلك قد يكون الخطأ الفعلي أعلى قليلاً."
+        ),
+        "rel_button": "🧪 افحص موثوقية النموذج على بياناتي",
+        "rel_running": "جاري اختبار النموذج على عدة فترات ماضية...",
+        "rel_title": "فحص الموثوقية على بياناتك",
+        "rel_desc": (
+            "يتعلّم النموذج من الماضي ثم يُختبر على الفترة التالية، عدة مرات متتالية "
+            "(تحقق متقاطع زمني)، ويُقارن بأفضل تخمين ثابت."
+        ),
+        "rel_period": "فترة الاختبار",
+        "rel_train": "صفوف التدريب",
+        "rel_test": "صفوف الاختبار",
+        "rel_baseline": "دقة خط الأساس",
+        "rel_summary": (
+            "متوسط الدقة **{accuracy}** مقابل خط الأساس **{baseline}** (تفوّق **{gain}** نقطة) — "
+            "متوسط ROC-AUC **{auc}** — التفاوت بين الفترات حوالي ±{spread} نقطة."
+        ),
+        "rel_verdict_strong": "قوي: النموذج يتفوّق بوضوح على خط الأساس في كل الفترات المختبرة. ومع ذلك تحقق منه على بيانات جديدة قبل الاعتماد عليه.",
+        "rel_verdict_moderate": "متوسط: أفضل من خط الأساس، لكن التفوق محدود أو يتغيّر بين الفترات. استخدم التوقعات للاسترشاد فقط.",
+        "rel_verdict_weak": "ضعيف: النموذج ليس أفضل بوضوح من خط الأساس على بياناتك. لا تستخدم توقعاته في القرارات.",
+        "rel_not_enough": "البيانات غير كافية لفحص موثوق: يلزم عدة فترات فيها عمليات رابحة وخاسرة.",
+        "rel_note": "هذه الأرقام مقاسة على بياناتك أنت. قد يقل الأداء على بيانات المستقبل إذا تغيّرت ظروف العمل.",
+        "download_scored": "⬇️ حمّل البيانات مع احتمال الربح (CSV)",
+        "scored_note": (
+            "كل صف يحصل على احتمال أن تكون العملية رابحة ومستوى مخاطرة (Low / Medium / High). "
+            "الصفوف التي قيمة `In Training Set` فيها 1 استُخدمت لتدريب النموذج، فاحتمالاتها متفائلة؛ "
+            "احكم على النموذج من الصفوف التي قيمتها 0."
+        ),
+        "pbi_title": "التصدير إلى Power BI",
+        "pbi_desc": (
+            "حزمة واحدة فيها البيانات النضيفة وتوقعات النموذج والتوقع المستقبلي وملخص شهري وتقرير الجودة "
+            "ومعادلات DAX جاهزة ودليل الإعداد."
+        ),
+        "pbi_download": "⬇️ حمّل حزمة Power BI (ZIP)",
+        "pbi_model_missing": "تُضاف توقعات النموذج للحزمة بعد تدريبه من تاب النموذج.",
+        "pbi_prepare": "جهّز حزمة Power BI",
+        "pbi_preparing": "جاري بناء الملفات (البيانات النضيفة والتوقع والتنبؤات)...",
+        "pbi_ready": "الحزمة جاهزة: {files} ملفات.",
+        "pbi_files": (
+            "- **`power_bi_data.xlsx` — ملف Excel واحد فيه كل الجداول** (Sales وForecast وMonthly وQuality وModelMetrics وStatus). "
+            "في Power BI: Get data ▸ Excel workbook ▸ علّم كل الجداول.\n"
+            "- ملفات CSV لنفس الجداول (`sales_scored.csv` بعد تدريب النموذج، و`cleaned_sales.csv`، و`forecast.csv`، ...)\n"
+            "- `measures.dax` و`load_sales.pq` و`README_POWERBI.md` و**`STEP_BY_STEP.md`** (دليل الإعداد الكامل)"
+        ),
+        "pbi_download_xlsx": "⬇️ حمّل ملف Excel واحد لـ Power BI",
+        "pbi_download_dashboard": "⬇️ حمّل لوحة Power BI الجاهزة (مشروع .pbip)",
+        "pbi_dashboard_note": (
+            "فك الضغط في `C:\\SalesIntelligence\\` (ملف Excel بداخله)، وافتح `Sales Dashboard.pbip` ببرنامج Power BI Desktop واضغط Refresh. "
+            "فيها 4 صفحات: نظرة عامة، التوقعات، مخاطر الخسارة، جودة البيانات. بُنيت بصيغة المشاريع المنشورة من Microsoft "
+            "وفُحصت مقابل JSON schemas الخاصة بها، لكنها لم تُفتح بعد داخل Power BI Desktop. لو ظهر خطأ "
+            "استخدم `STEP_BY_STEP.md` (الطريقة اليدوية) وأرسل لي الخطأ."
+        ),
+        "download_model": "⬇️ حمّل النموذج المدرَّب (.joblib)",
+        "download_model_package": "⬇️ حمّل حزمة النموذج (ZIP: النموذج + البطاقة + السكربت + الدليل)",
+        "model_export_note": (
+            "لاستخدام النموذج داخل نظامكم. لا تحمّل ملف .joblib إلا من مصدر موثوق (قد ينفّذ كوداً) "
+            "واستخدم نفس إصدار scikit-learn المذكور في `model_card.json`."
+        ),
+        "pbi_too_big": "البيانات أكثر من {limit} صف، وهذا كثير على ملف Excel واحد. استخدم الحزمة (ملفات CSV).",
+        "pbi_steps": "دليل الإعداد: افتح `STEP_BY_STEP.md` داخل الحزمة. الإعداد الأول يستغرق نحو ساعة، والتحديثات بعده دقيقة.",
+        "pbi_dax_title": "معادلات DAX (موجودة أيضاً داخل الحزمة)",
+        "pbi_refresh_title": "التحديث التلقائي",
+        "pbi_refresh_text": (
+            "1. ضع كل ملف مبيعات جديد في مجلد `inbox`.\n"
+            "2. الأمر `python refresh_exports.py` يحدّث الملفات في `exports` مرة واحدة؛ أضف `--watch 300` لمراقبة المجلد باستمرار.\n"
+            "3. جدوله بـ Windows Task Scheduler (الملف `run_refresh_windows.bat`) أو cron.\n"
+            "4. في Power BI Service اضبط التحديث المجدول للـ Dataset. برنامج Power BI Desktop لا يحدّث نفسه. "
+            "الملفات على جهاز أو سيرفر محلي تحتاج On-premises data gateway، وحساب Pro يسمح بـ 8 تحديثات مجدولة يومياً."
+        ),
+        "ans_forecast": "توقع {month}: {metric} {value} (المدى المحتمل من {low} إلى {high}). {verdict}",
+        "tool_forecast": "توقع",
         "err_empty": "الملف فارغ.",
     },
 }

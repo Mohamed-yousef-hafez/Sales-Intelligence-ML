@@ -3,7 +3,7 @@ import io
 
 import pandas as pd
 
-from .i18n import COLUMN_LABELS_AR
+from .i18n import COLUMN_LABELS_AR, t
 
 # Excel runs text that starts with one of these as a formula (CSV/formula injection).
 FORMULA_STARTS = ("=", "+", "-", "@", "\t", "\r")
@@ -87,3 +87,49 @@ def template_xlsx_bytes(lang):
                 width = max(len(str(cell.value)) if cell.value is not None else 0 for cell in column_cells)
                 sheet.column_dimensions[column_cells[0].column_letter].width = min(max(width + 2, 12), 70)
     return buffer.getvalue()
+
+
+# ---------------------------------------------------------------------------- quality report table
+def quality_report_frame(report, lang):
+    """The Data Quality Report as a table (shown in the app, and exported as CSV for Power BI)."""
+    def label(column):
+        return COLUMN_LABELS_AR.get(column, column) if lang == "ar" else column
+
+    def fmt(value):
+        if isinstance(value, bool):
+            return t(lang, "yes") if value else t(lang, "no")
+        if isinstance(value, float):
+            return f"{value:,.2f}"
+        if isinstance(value, list):
+            return ", ".join(label(item) for item in value) if value else "—"
+        return str(value)
+
+    details = [
+        ("dq_changes", report["cleaning_changes"]),
+        ("dq_before", report["rows_before"]),
+        ("dq_after", report["rows_after_cleaning"]),
+        ("dq_removed", report["rows_removed_total"]),
+        ("dq_columns", report["columns_before"]),
+        ("dq_placeholders", report["placeholders_converted"]),
+        ("dq_summary_rows", report["summary_rows_removed"]),
+        ("dq_variants", report["spelling_variants_unified"]),
+        ("dq_duplicates", report["duplicate_rows_removed"]),
+        ("dq_invalid", report["rows_missing_required_fields"]),
+        ("dq_impossible", report["rows_impossible_values"]),
+        ("dq_filled", report["categories_filled_unknown"]),
+        ("dq_extreme", report["possible_extreme_values_kept"]),
+        ("dq_profit_from_cost", report["profit_calculated_from_cost"]),
+        ("dq_missing_optional", report["optional_columns_missing"]),
+        ("dq_missing_before", report["missing_cells_before_cleaning"]),
+        ("dq_missing_after", report["missing_cells_after_cleaning"]),
+        ("dq_sales", report["sales_total"]),
+        ("dq_profit", report["profit_total"]),
+        ("dq_discount", report["discount_converted_from_percent"]),
+        ("dq_date_order", t(lang, "date_order_" + report["date_order"])),
+        ("dq_date_min", report["date_min"]),
+        ("dq_date_max", report["date_max"]),
+    ]
+    return pd.DataFrame(
+        [(t(lang, key), fmt(value)) for key, value in details],
+        columns=[t(lang, "dq_metric"), t(lang, "dq_value")],
+    )
