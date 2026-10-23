@@ -1,4 +1,4 @@
-# Sales Intelligence — End-to-End Machine Learning
+# Sales Intelligence —  Machine Learning
 
 A simple company-oriented Sales ML project covering:
 
@@ -11,7 +11,11 @@ A simple company-oriented Sales ML project covering:
 - Simple agent/tool routing
 - Basic upload security
 - Application monitoring/logging
+## Demo Video
 
+Watch the Financial Compliance Agent interface demo:
+
+[▶ Watch the Demo Video](https://github.com/user-attachments/assets/586044e1-a2ed-4d7a-9c87-db02f928bb43)
 ## Arabic and English support
 
 The company can upload a sales file in **Arabic or English** (CSV or XLSX) and the application works the same way.
